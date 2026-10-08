@@ -1077,6 +1077,8 @@ def show_auth_page() -> None:
                     '<p>加入高校科研协作网络</p></div>',
                     unsafe_allow_html=True,
                 )
+                st.caption("账号信息 → 邮箱验证 → 进入平台")
+                st.info("创建账号后进入邮箱验证步骤，发送验证码并输入邮件中的 6 位数字。")
                 with st.form("register_form"):
                     identity_left, identity_right = st.columns(2)
                     with identity_left:
@@ -1204,6 +1206,7 @@ def show_auth_page() -> None:
                 '<div class="zl-auth-foot">登录即表示你同意遵守平台科研协作规范</div>',
                 unsafe_allow_html=True,
             )
+            st.caption("邮箱验证版 · 2026.10.08")
 
 
 def render_email_verification_panel(user_id: int, *, context: str = "profile") -> bool:
