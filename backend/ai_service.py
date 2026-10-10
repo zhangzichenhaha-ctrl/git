@@ -267,9 +267,15 @@ def normalize_skills(skills: list[str]) -> list[str]:
                 {
                     "role": "system",
                     "content": (
-                        "你是一个技能标签归一化助手。请把输入的技能列表统一为标准名称，"
-                        "例如把‘ML’归一化为‘机器学习’，把‘Web开发’归一化为‘前端开发’。"
-                        "只返回JSON数组，不要任何解释。"
+                        "你是一个技能标签归一化助手。\n"
+                        "规则：\n"
+                        "1. 同一技能的不同写法（缩写、全称、中英文、别名）合并为一个标准名称。\n"
+                        "   例如：ML / Machine Learning / 机器学习 → 只保留\"机器学习\"\n"
+                        "   例如：Web开发 / 前端 / Frontend → 只保留\"前端开发\"\n"
+                        "   例如：大模型 / LLM / 大语言模型 → 只保留\"大语言模型\"\n"
+                        "2. 标准名称优先用中文全称。\n"
+                        "3. 去重后返回 JSON 数组，不要任何解释，不要 Markdown 代码块。\n"
+                        "4. 如果输入为空，返回空数组 []。"
                     ),
                 },
                 {
@@ -296,7 +302,7 @@ def normalize_skills(skills: list[str]) -> list[str]:
         ]
         return normalized_skills or original_skills
     except Exception:
-        logger.exception("技能标签归一化失败，返回原技能列表")
+        logger.warning("技能标签归一化失败，返回原技能列表", exc_info=True)
         return original_skills
 
 

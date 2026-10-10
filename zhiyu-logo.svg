@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="知遇 LinkLab logo">
+  <title>知遇 LinkLab</title>
+  <line x1="19.05" y1="47.62" x2="80.29" y2="10.83" stroke="#8FA5C7" stroke-width="2.38"/>
+  <line x1="19.05" y1="52.38" x2="78.80" y2="86.90" stroke="#8FA5C7" stroke-width="2.38"/>
+  <circle cx="19.05" cy="50" r="14.29" fill="#6D28D9"/>
+  <circle cx="80.95" cy="21.43" r="14.29" fill="#0891B2"/>
+  <circle cx="76.19" cy="78.57" r="14.29" fill="#2563EB"/>
+</svg>

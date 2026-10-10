@@ -1,8 +1,10 @@
 from hashlib import sha256
+from datetime import datetime
 import os
 import re
 import sys
 import time
+import textwrap
 from html import escape
 from pathlib import Path
 from urllib.parse import urlencode
@@ -299,7 +301,7 @@ def set_current_user(
 
 
 def navigate_to(page: str) -> None:
-    st.session_state["app_page"] = page
+    st.session_state["_pending_page"] = page
     st.session_state.pop("selected_project_id", None)
     st.session_state.pop("project_return_page", None)
 
@@ -307,6 +309,131 @@ def navigate_to(page: str) -> None:
 def open_project_detail(project_id: int, return_page: str) -> None:
     st.session_state["selected_project_id"] = project_id
     st.session_state["project_return_page"] = return_page
+
+
+def _notification_time_label(value: object) -> str:
+    raw_value = str(value or "").replace("Z", "+00:00")
+    try:
+        created_at = datetime.fromisoformat(raw_value)
+        now = datetime.now(created_at.tzinfo) if created_at.tzinfo else datetime.now()
+        seconds = max(0, int((now - created_at).total_seconds()))
+    except ValueError:
+        return str(value or "时间未知").replace("T", " ")[:16]
+
+    if seconds < 60:
+        return "刚刚"
+    if seconds < 3600:
+        return f"{seconds // 60} 分钟前"
+    if seconds < 86400:
+        return f"{seconds // 3600} 小时前"
+    if seconds < 604800:
+        return f"{seconds // 86400} 天前"
+    return created_at.strftime("%Y-%m-%d %H:%M")
+
+
+def _notification_preview(value: object, max_length: int = 100) -> str:
+    preview = " ".join(str(value or "").split())
+    if len(preview) > max_length:
+        return preview[: max_length - 1] + "…"
+    return preview or "暂无内容"
+
+
+def _mark_notification_read(notification_id: int, user_id: int) -> bool:
+    result = post_api(
+        f"/api/notifications/{notification_id}/read",
+        {"user_id": user_id},
+    )
+    return bool(result and result.get("success"))
+
+
+@st.dialog("双方匹配成功")
+def show_notification_match_dialog(
+    match_detail: dict,
+    counterpart_school: str = "",
+) -> None:
+    counterpart = match_detail.get("counterpart") or {}
+    st.markdown(f"**用户名**：{counterpart.get('username') or '未提供'}")
+    st.markdown(f"**学校**：{counterpart_school or '未提供'}")
+
+    contact_value = counterpart.get("contact_value") or ""
+    contact_method = counterpart.get("contact_method") or ""
+    if contact_value:
+        method_labels = {
+            "wechat": "微信",
+            "qq": "QQ",
+            "phone": "手机号",
+            "other": "其他联系方式",
+        }
+        st.markdown(
+            f"**{method_labels.get(contact_method, '联系方式')}**："
+            f"{contact_value}"
+        )
+    else:
+        st.info("对方暂未公开联系方式")
+
+
+def _handle_notification_click(item: dict, user_id: int) -> None:
+    notification_id = item.get("notification_id")
+    if notification_id is None:
+        return
+    if not _mark_notification_read(int(notification_id), user_id):
+        return
+
+    notification_type = item.get("type")
+    project_id = item.get("related_project_id")
+    related_user_id = item.get("related_user_id")
+
+    if notification_type == "candidate_interested":
+        st.session_state["selected_project_id"] = project_id
+        st.session_state["notification_target_candidate_id"] = related_user_id
+        st.session_state["_pending_page"] = "我的项目"
+        st.rerun()
+    elif notification_type == "mutual_match":
+        if not project_id:
+            st.toast("匹配项目不存在")
+            return
+        match_user_id = user_id
+        project_snapshot = get_api(
+            f"/api/project/{project_id}?user_id={user_id}",
+            show_error=False,
+        )
+        if (
+            project_snapshot
+            and project_snapshot.get("owner_id") == user_id
+            and related_user_id
+        ):
+            match_user_id = int(related_user_id)
+        match_detail = get_api(
+            f"/api/match/{match_user_id}/{project_id}?viewer_id={user_id}",
+            show_error=False,
+        )
+        if match_detail and match_detail.get("mutual"):
+            counterpart_school = ""
+            if match_user_id != user_id and project_snapshot:
+                counterpart_school = str(project_snapshot.get("owner_school") or "")
+            show_notification_match_dialog(match_detail, counterpart_school)
+        else:
+            st.toast("匹配详情暂时不可用")
+    elif notification_type == "candidate_declined":
+        navigate_to("匹配推荐")
+        st.rerun()
+    elif notification_type in {
+        "project_moderated",
+        "project_restored",
+        "project_status_changed",
+    }:
+        if project_id:
+            open_project_detail(int(project_id), "通知")
+            st.session_state["_pending_page"] = "通知"
+            st.rerun()
+    elif notification_type == "project_deleted":
+        st.toast("该项目已删除")
+        st.rerun()
+    elif notification_type == "feedback_reply":
+        navigate_to("意见反馈")
+        st.rerun()
+    else:
+        st.rerun()
 
 
 def render_page_heading(title: str, description: str) -> None:
@@ -851,13 +978,15 @@ def show_home_page() -> None:
     username = st.session_state.get("username", "同学")
     school = st.session_state.get("school") or "高校科研社区"
     st.markdown(
-        f"""
+        textwrap.dedent(
+            f"""
         <section class="zl-hero">
             <div class="zl-eyebrow" style="color:#83c9ff">RESEARCH COLLABORATION</div>
             <h1>你好，{escape(username)}<span class="zl-hero-status">已登录</span></h1>
             <p>{escape(school)} · 寻找契合的科研项目，结识志同道合的伙伴。</p>
         </section>
         """,
+        ),
         unsafe_allow_html=True,
     )
 
@@ -1047,7 +1176,8 @@ def show_auth_page() -> None:
         with st.container(key="auth_copy"):
             render_brand_lockup(inverse=True, subtitle="高校科研协作匹配平台")
             st.markdown(
-                """
+                textwrap.dedent(
+                    """
                 <div class="zl-auth-kicker">RESEARCH COLLABORATION NETWORK</div>
                 <h1>知遇 LinkLab</h1>
                 <p>找到你的科研搭档。以能力连接机遇，与同行共赴探索。</p>
@@ -1057,6 +1187,7 @@ def show_auth_page() -> None:
                     <span>同校优先 · 跨校开放</span>
                 </div>
                 """,
+                ),
                 unsafe_allow_html=True,
             )
 
@@ -1746,44 +1877,128 @@ def show_notifications_page() -> None:
         render_empty_state(message, "项目与匹配状态发生变化时会在这里提醒你。", icon="notifications")
         return
 
+    st.markdown(
+        textwrap.dedent(
+            """
+        <style>
+        .zl-notification-card {
+            margin-bottom: 12px;
+            min-height: 112px;
+            box-sizing: border-box;
+            padding: 14px 16px;
+            border: 1px solid #E4E7EC;
+            border-radius: 8px;
+            background: #FFFFFF;
+            text-align: left;
+            transition: background 120ms ease, box-shadow 120ms ease;
+        }
+        .zl-notification-card:hover {
+            background: #F5F8FF;
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.08);
+        }
+        .zl-notification-card-unread {
+            border-left: 3px solid #2563EB;
+        }
+        .zl-notification-title-row {
+            display: flex;
+            align-items: center;
+            min-height: 22px;
+            line-height: 1.35;
+        }
+        .zl-notification-dot {
+            width: 6px;
+            height: 6px;
+            margin-right: 8px;
+            flex: 0 0 6px;
+            border-radius: 50%;
+            background: #2563EB;
+        }
+        .zl-notification-title {
+            color: #1A1A1A;
+            font-size: 16px;
+            font-weight: 700;
+        }
+        .zl-notification-type {
+            margin-left: 8px;
+            color: #999999;
+            font-size: 12px;
+            font-weight: 400;
+        }
+        .zl-notification-content {
+            margin-top: 6px;
+            color: #666666;
+            font-size: 14px;
+            font-weight: 400;
+            line-height: 1.45;
+            display: -webkit-box;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 2;
+            overflow: hidden;
+        }
+        .zl-notification-time {
+            margin-top: 8px;
+            color: #999999;
+            font-size: 12px;
+            font-weight: 400;
+            line-height: 1.2;
+        }
+        .zl-notification-action {
+            margin-top: -4px;
+            margin-bottom: 12px;
+        }
+        </style>
+        """,
+        ),
+        unsafe_allow_html=True,
+    )
+
+    notification_type_labels = {
+        "candidate_interested": "候选人",
+        "mutual_match": "匹配结果",
+        "candidate_declined": "匹配结果",
+        "project_moderated": "项目动态",
+        "project_restored": "项目动态",
+        "project_status_changed": "项目动态",
+        "project_deleted": "项目动态",
+        "feedback_reply": "系统通知",
+    }
     for item in notifications:
         notification_id = item.get("notification_id")
         is_read = bool(item.get("is_read"))
-        css_class = "zl-notification" if is_read else "zl-notification zl-notification-unread"
-        created_at = str(item.get("created_at") or "").replace("T", " ")[:16]
+        title = str(item.get("title") or "通知")
+        preview = _notification_preview(item.get("content"))
+        time_label = _notification_time_label(item.get("created_at"))
+        type_label = notification_type_labels.get(item.get("type"), "通知")
+        card_class = (
+            "zl-notification-card zl-notification-card-unread"
+            if not is_read
+            else "zl-notification-card"
+        )
+        marker_html = (
+            "<span class='zl-notification-dot' aria-hidden='true'></span>"
+            if not is_read
+            else ""
+        )
         st.markdown(
-            f"""
-            <div class='{css_class}'>
-                <div class='zl-notification-title'>{escape(str(item.get('title') or '通知'))}</div>
-                <div class='zl-notification-content'>{escape(str(item.get('content') or ''))}</div>
-                <div class='zl-notification-time'>{escape(created_at or '时间未知')}</div>
-            </div>
-            """,
+            (
+                f'<div class="{card_class}">'
+                f'<div class="zl-notification-title-row">'
+                f'{marker_html}'
+                f'<span class="zl-notification-title">{escape(title)}</span>'
+                f'<span class="zl-notification-type">{escape(type_label)}</span>'
+                f'</div>'
+                f'<div class="zl-notification-content">{escape(preview)}</div>'
+                f'<div class="zl-notification-time">{escape(time_label)}</div>'
+                f'</div>'
+            ),
             unsafe_allow_html=True,
         )
-        controls = st.columns([1, 1, 4])
-        project_id = item.get("related_project_id")
-        if project_id:
-            controls[0].button(
-                "查看项目",
-                key=f"notification_project_{notification_id}",
-                on_click=open_project_detail,
-                args=(int(project_id), "通知"),
-                use_container_width=True,
-            )
-        if not is_read and controls[1].button(
-            "标记已读",
-            key=f"notification_read_{notification_id}",
+        if st.button(
+            "查看详情",
+            key=f"notification_open_{notification_id}",
             use_container_width=True,
         ):
-            with st.spinner("正在更新通知状态..."):
-                update_result = post_api(
-                    f"/api/notifications/{notification_id}/read",
-                    {"user_id": user_id},
-                )
-            if update_result and update_result.get("success"):
-                queue_success("通知已标记为已读")
-                st.rerun()
+            _handle_notification_click(item, user_id)
 
 
 def show_my_projects_page() -> None:
@@ -2007,7 +2222,8 @@ def show_authenticated_app() -> None:
         school = st.session_state.get("school")
         initial = (username.strip()[:1] or "知").upper()
         st.markdown(
-            f"""
+            textwrap.dedent(
+                f"""
             <div class="zl-sidebar-user">
                 <div class="zl-avatar">{escape(initial)}</div>
                 <div>
@@ -2016,6 +2232,7 @@ def show_authenticated_app() -> None:
                 </div>
             </div>
             """,
+            ),
             unsafe_allow_html=True,
         )
 
@@ -2091,6 +2308,9 @@ def main() -> None:
         page_icon="🔗",
         layout="wide",
     )
+    pending_page = st.session_state.pop("_pending_page", None)
+    if pending_page:
+        st.session_state["app_page"] = pending_page
     inject_theme("user" if st.session_state.get("user_id") else "auth")
 
     if st.session_state.get("user_id"):

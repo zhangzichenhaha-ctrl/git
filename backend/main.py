@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import logging
 import os
 import re
 import secrets
@@ -46,6 +47,7 @@ from models import (
 
 app = FastAPI()
 ADMIN_TOKENS: dict[str, int] = {}
+logger = logging.getLogger(__name__)
 
 
 @app.on_event("startup")
@@ -2693,6 +2695,17 @@ def mark_all_notifications_read(
 def parse_profile(request: ProfileRequest):
     try:
         result = parse_user_profile(request.raw_text)
+        for field in ("skills", "interests"):
+            original_value = result.get(field, [])
+            try:
+                result[field] = normalize_skills(original_value)
+            except Exception:
+                result[field] = original_value
+                logger.warning(
+                    "用户画像字段 %s 归一化失败，保留原始值",
+                    field,
+                    exc_info=True,
+                )
         return {"success": True, "data": result}
     except Exception:
         return {"success": False, "message": "解析失败，请重试"}
